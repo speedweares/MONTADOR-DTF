@@ -4,7 +4,10 @@ from PIL import Image
 import math
 from io import BytesIO
 
-st.set_page_config(page_title="Montador DTF Final", layout="wide")
+# Desactivar el límite de BOMBS (imágenes grandes)
+Image.MAX_IMAGE_PIXELS = None
+
+st.set_page_config(page_title="Montador DTF Final (Fixed)", layout="wide")
 st.title("🖨️ Montador DTF - Packing de múltiples diseños")
 
 ROLL_WIDTH_CM = 55
@@ -43,10 +46,15 @@ if uploaded_files:
         config.append((file, tipo, copias))
 
     if st.button("🧩 Generar montaje"):
-        # Preparar lista de items (imagen, width_cm, height_px)
+        # Preparar lista de items (imagen, width_cm, width_px, height_px)
         items = []
         for file, tipo_diseño, copias in config:
-            image = Image.open(file).convert("RGBA")
+            try:
+                image = Image.open(file).convert("RGBA")
+            except Exception as e:
+                st.error(f"Error abriendo la imagen: {e}")
+                continue
+
             # Determinar ancho en cm según tipo
             if "Espalda" in tipo_diseño:
                 width_cm = 22.5
@@ -59,11 +67,11 @@ if uploaded_files:
             width_px = int(width_cm * PX_PER_CM)
             aspect_ratio = image.height / image.width
             height_px = int(width_px * aspect_ratio)
-            resized_img = image.resize((width_px, height_px))
+            img_resized = image.resize((width_px, height_px))
 
             # Agregar copias a la lista
             for _ in range(copias):
-                items.append((resized_img, width_cm, width_px, height_px))
+                items.append((img_resized, width_cm, width_px, height_px))
 
         # Packing: ubicar cada item en filas de ancho fijo ROLL_WIDTH_CM
         roll_width_px = int(ROLL_WIDTH_CM * PX_PER_CM)
@@ -76,9 +84,7 @@ if uploaded_files:
             # Si cabe en la fila actual
             if current_x == 0:
                 x = 0
-                # Correrá sin spacing a izquierda
             else:
-                # Intentar colocar con spacing
                 if current_x + SPACING_PX + w_px <= roll_width_px:
                     x = current_x + SPACING_PX
                 else:
