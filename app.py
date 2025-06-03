@@ -43,7 +43,7 @@ if uploaded_file:
         filas = math.ceil(copias / por_fila)
 
         canvas_w_px = int(ROLL_WIDTH_CM * PX_PER_CM)
-        canvas_h_px = filas * (target_h_px + int(1 * PX_PER_CM))  # 1 cm entre copias
+        canvas_h_px = filas * (target_h_px + int(1 * PX_PER_CM))
 
         bloque = Image.new("RGBA", (canvas_w_px, canvas_h_px), (255, 255, 255, 0))
         for i in range(copias):
