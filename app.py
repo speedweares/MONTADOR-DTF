@@ -1,32 +1,34 @@
 
 import streamlit as st
-from PIL import Image
+import cv2
+import numpy as np
 import math
 from io import BytesIO
 import zipfile
 import tempfile
 import os
+from PIL import Image
 
-st.set_page_config(page_title="Montador DTF con cropping y spacing ajustado", layout="wide")
-st.title("🖨️ Montador DTF - Packing con crop y 0.5cm spacing")
+st.set_page_config(page_title="Montador DTF Optimizado", layout="wide")
+st.title("🖨️ Montador DTF - Versión Optimizada para Muchos Imágenes")
 
 ROLL_WIDTH_CM = 55
 
-# Usamos dos modalidades de resolución:
-PPI_PREVIEW = 100  # para vista previa ligera
-PPI_FINAL = 300    # para descarga final
+# Resoluciones
+PPI_PREVIEW = 50   # aún más baja para previsualización (50 ppi)
+PPI_FINAL = 300    # descarga final
 PX_PER_CM_PREVIEW = PPI_PREVIEW / 2.54
 PX_PER_CM_FINAL = PPI_FINAL / 2.54
 
-# Espaciado para corte de 0.5 cm
+# Espaciado 0.5 cm
 SPACING_CM = 0.5
 SPACING_PX_PREVIEW = int(SPACING_CM * PX_PER_CM_PREVIEW)
 SPACING_PX_FINAL = int(SPACING_CM * PX_PER_CM_FINAL)
 
 # Umbral para dividir en "páginas" (1 m en 300 ppi)
-UMBRAL_PX_FINAL = int((100) * PX_PER_CM_FINAL)  # 100 cm * px_por_cm
+UMBRAL_PX_FINAL = int(100 * PX_PER_CM_FINAL)
 
-# Desactivar límite BOMBS para imágenes grandes
+# Desactivar límite BOMBS para PIL
 Image.MAX_IMAGE_PIXELS = None
 
 uploaded_files = st.file_uploader(
@@ -38,6 +40,7 @@ uploaded_files = st.file_uploader(
 if uploaded_files:
     st.markdown("### 📋 Configura cada diseño")
     configuraciones = []
+    total_items = 0
     for i, file in enumerate(uploaded_files):
         col1, col2, col3 = st.columns([2, 2, 1])
         with col1:
@@ -54,27 +57,54 @@ if uploaded_files:
         with col3:
             st.image(file, width=80)
         configuraciones.append((file, tipo, copias))
+        total_items += copias
+
+    # Advertencia si muchos ítems
+    if total_items > 200:
+        st.warning("Se detectaron muchos diseños, la previsualización puede tardar. Se omitirá la vista previa.")
+        show_preview = False
+    else:
+        show_preview = True
 
     if st.button("🧩 Generar montaje"):
-        # 1) Preparamos la lista de items con imagen recortada y redimensionada
-        items = []
-        preview_placements = []
-        final_placements = []
+        # Preprarar carpetas temporales
+        temp_dir = tempfile.mkdtemp()
+        page_index = 1
+        pages_files = []
+        # Variables de colocación final
+        roll_w_px_final = int(ROLL_WIDTH_CM * PX_PER_CM_FINAL)
+        cur_x_fin = 0
+        cur_row_h_fin = 0
+        y_offset_fin = 0
+        # Variables para page
+        cur_page = Image.new("RGBA", (roll_w_px_final, UMBRAL_PX_FINAL), (255,255,255,0))
 
+        # Para preview si aplica
+        if show_preview:
+            roll_w_px_preview = int(ROLL_WIDTH_CM * PX_PER_CM_PREVIEW)
+            cur_x_prev = 0
+            cur_row_h_prev = 0
+            y_offset_prev = 0
+            canvas_prev = Image.new("RGBA", (roll_w_px_preview, 1), (255,255,255,0))  # altura inicial mínima
+
+        # Procesar cada diseño
         for file, tipo_diseño, copias in configuraciones:
-            try:
-                img = Image.open(file).convert("RGBA")
-            except Exception as e:
-                st.error(f"Error cargando {file.name}: {e}")
-                continue
+            # Leer con OpenCV para velocidad
+            file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
+            img_cv = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
+            # Dividir canales y recortar alpha
+            if img_cv.shape[2] == 4:
+                alpha = img_cv[:,:,3]
+                coords = cv2.findNonZero(alpha)
+                x,y,w,h = cv2.boundingRect(coords)
+                img_cv = img_cv[y:y+h, x:x+w]
+            # Convertir a BGRA si no tiene alpha
+            if img_cv.shape[2] == 3:
+                b,g,r = cv2.split(img_cv)
+                alpha = np.ones(b.shape, dtype=b.dtype) * 255
+                img_cv = cv2.merge((b,g,r,alpha))
 
-            # Crop transparente: obtén canal alpha y bbox
-            alpha = img.split()[3]
-            bbox = alpha.getbbox()
-            if bbox:
-                img = img.crop(bbox)
-
-            # Determinar ancho en cm según tipo
+            # Determinar ancho en cm
             if "Espalda" in tipo_diseño:
                 ancho_cm = 22.5
             elif "5" in tipo_diseño:
@@ -82,112 +112,105 @@ if uploaded_files:
             else:
                 ancho_cm = 7
 
-            # Calcular px para preview y final
-            w_px_preview = int(ancho_cm * PX_PER_CM_PREVIEW)
-            h_px_preview = int((img.height / img.width) * w_px_preview)
-            img_preview = img.resize((w_px_preview, h_px_preview), Image.LANCZOS)
+            # Calcular dimensiones en preview y final
+            h_cv, w_cv = img_cv.shape[:2]
+            w_px_prev = int(ancho_cm * PX_PER_CM_PREVIEW)
+            h_px_prev = int((h_cv / w_cv) * w_px_prev)
+            w_px_fin = int(ancho_cm * PX_PER_CM_FINAL)
+            h_px_fin = int((h_cv / w_cv) * w_px_fin)
 
-            w_px_final = int(ancho_cm * PX_PER_CM_FINAL)
-            h_px_final = int((img.height / img.width) * w_px_final)
-            img_final = img.resize((w_px_final, h_px_final), Image.LANCZOS)
+            # Redimensionar con OpenCV (bicúbico)
+            img_prev = cv2.resize(img_cv, (w_px_prev, h_px_prev), interpolation=cv2.INTER_CUBIC)
+            img_fin = cv2.resize(img_cv, (w_px_fin, h_px_fin), interpolation=cv2.INTER_CUBIC)
 
+            # Convertir preview a PIL si es necesario
+            if show_preview:
+                img_prev_pil = Image.fromarray(cv2.cvtColor(img_prev, cv2.COLOR_BGRA2RGBA))
+
+            # Convertir final a PIL
+            img_fin_pil = Image.fromarray(cv2.cvtColor(img_fin, cv2.COLOR_BGRA2RGBA))
+
+            # Añadir copias
             for _ in range(copias):
-                items.append((img_preview, img_final, w_px_preview, h_px_preview, w_px_final, h_px_final))
-
-        # 2) Colocar items en filas para preview y final
-        roll_w_px_preview = int(ROLL_WIDTH_CM * PX_PER_CM_PREVIEW)
-        roll_w_px_final = int(ROLL_WIDTH_CM * PX_PER_CM_FINAL)
-
-        cur_x_prev = 0
-        cur_row_h_prev = 0
-        y_offset_prev = 0
-
-        cur_x_fin = 0
-        cur_row_h_fin = 0
-        y_offset_fin = 0
-
-        for img_p, img_f, w_p, h_p, w_f, h_f in items:
-            # Preview
-            if cur_x_prev == 0:
-                x_prev = 0
-            else:
-                if cur_x_prev + SPACING_PX_PREVIEW + w_p <= roll_w_px_preview:
-                    x_prev = cur_x_prev + SPACING_PX_PREVIEW
-                else:
-                    y_offset_prev += cur_row_h_prev + SPACING_PX_PREVIEW
-                    cur_x_prev = 0
-                    cur_row_h_prev = 0
-                    x_prev = 0
-
-            preview_placements.append((img_p, x_prev, y_offset_prev, w_p, h_p))
-            cur_x_prev = x_prev + w_p
-            if h_p > cur_row_h_prev:
-                cur_row_h_prev = h_p
-
-            # Final
-            if cur_x_fin == 0:
-                x_fin = 0
-            else:
-                if cur_x_fin + SPACING_PX_FINAL + w_f <= roll_w_px_final:
-                    x_fin = cur_x_fin + SPACING_PX_FINAL
-                else:
-                    y_offset_fin += cur_row_h_fin + SPACING_PX_FINAL
-                    cur_x_fin = 0
-                    cur_row_h_fin = 0
+                # Colocación final
+                if cur_x_fin == 0:
                     x_fin = 0
+                else:
+                    if cur_x_fin + SPACING_PX_FINAL + w_px_fin <= roll_w_px_final:
+                        x_fin = cur_x_fin + SPACING_PX_FINAL
+                    else:
+                        y_offset_fin += cur_row_h_fin + SPACING_PX_FINAL
+                        cur_x_fin = 0
+                        cur_row_h_fin = 0
+                        x_fin = 0
+                # Si excede página
+                if y_offset_fin + h_px_fin > page_index * UMBRAL_PX_FINAL:
+                    # Guardar página actual
+                    page_path = os.path.join(temp_dir, f"page_{page_index}.png")
+                    cur_page.save(page_path)
+                    pages_files.append(page_path)
+                    page_index += 1
+                    cur_page = Image.new("RGBA", (roll_w_px_final, UMBRAL_PX_FINAL), (255,255,255,0))
+                # Posición local en página
+                y_local = y_offset_fin - ((page_index-1) * UMBRAL_PX_FINAL)
+                cur_page.paste(img_fin_pil, (x_fin, y_local), img_fin_pil)
+                # Actualizar offsets
+                cur_x_fin = x_fin + w_px_fin
+                if h_px_fin > cur_row_h_fin:
+                    cur_row_h_fin = h_px_fin
 
-            final_placements.append((img_f, x_fin, y_offset_fin, w_f, h_f))
-            cur_x_fin = x_fin + w_f
-            if h_f > cur_row_h_fin:
-                cur_row_h_fin = h_f
+                # Colocación preview si aplica
+                if show_preview:
+                    if cur_x_prev == 0:
+                        x_prev = 0
+                    else:
+                        if cur_x_prev + SPACING_PX_PREVIEW + w_px_prev <= roll_w_px_preview:
+                            x_prev = cur_x_prev + SPACING_PX_PREVIEW
+                        else:
+                            y_offset_prev += cur_row_h_prev + SPACING_PX_PREVIEW
+                            cur_x_prev = 0
+                            cur_row_h_prev = 0
+                            x_prev = 0
+                    canvas_prev_temp = Image.new("RGBA", (roll_w_px_preview, y_offset_prev + cur_row_h_prev + h_px_prev), (255,255,255,0))
+                    for img_p, xp, yp, wp, hp in [(img_prev_pil, x_prev, y_offset_prev, w_px_prev, h_px_prev)]:
+                        canvas_prev_temp.paste(img_p, (xp, yp), img_p)
+                    canvas_prev = canvas_prev_temp
+                    cur_x_prev = x_prev + w_px_prev
+                    if h_px_prev > cur_row_h_prev:
+                        cur_row_h_prev = h_px_prev
 
-        # 3) Crear lienzo preview
-        total_h_prev = y_offset_prev + cur_row_h_prev
-        canvas_prev = Image.new("RGBA", (roll_w_px_preview, total_h_prev), (255, 255, 255, 0))
-        for img_p, x_p, y_p, w_p, h_p in preview_placements:
-            canvas_prev.paste(img_p, (x_p, y_p), img_p)
+        # Guardar última página final
+        pages_files.append(os.path.join(temp_dir, f"page_{page_index}.png"))
+        cur_page.save(pages_files[-1])
 
-        st.success("✅ Vista previa generada (baja resolución).")
-        st.image(canvas_prev, caption="👁️ Vista previa (PPI reducido)", use_column_width=True)
+        # Mostrar preview
+        if show_preview:
+            st.success("✅ Vista previa generada (baja resolución).")
+            st.image(canvas_prev, caption="👁️ Vista previa (PPI bajo)", use_column_width=True)
 
-        # 4) Crear páginas en resolución final
-        pages = []
-        cur_page = Image.new("RGBA", (roll_w_px_final, UMBRAL_PX_FINAL), (255, 255, 255, 0))
-        page_index = 1
-
-        for (img_f, x_f, y_f, w_f, h_f) in final_placements:
-            if y_f + h_f > (page_index * UMBRAL_PX_FINAL):
-                pages.append(cur_page)
-                cur_page = Image.new("RGBA", (roll_w_px_final, UMBRAL_PX_FINAL), (255, 255, 255, 0))
-                page_index += 1
-
-            y_local = y_f - ((page_index - 1) * UMBRAL_PX_FINAL)
-            cur_page.paste(img_f, (x_f, y_local), img_f)
-
-        pages.append(cur_page)
-
-        # 5) Mostrar datos finales y descarga
+        # Calcular medidas totales
         total_h_fin = y_offset_fin + cur_row_h_fin
         total_cm = total_h_fin / PX_PER_CM_FINAL
         total_m = total_cm / 100
         st.success(f"✅ Montaje FINAL preparado → Altura total: {total_cm:.1f} cm ({total_m:.2f} m)")
-        st.write(f"• Se generaron **{len(pages)} página(s)** de {UMBRAL_PX_FINAL} px (~1 m a 300 ppi).")
+        st.write(f"• Se generaron **{len(pages_files)} página(s)** de {UMBRAL_PX_FINAL} px (~1 m a 300 ppi).")
 
+        # Crear ZIP con páginas
         with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmpzip:
-            with zipfile.ZipFile(tmpzip.name, "w", zipfile.ZIP_DEFLATED) as z:
-                for idx, pg in enumerate(pages, start=1):
-                    img_bytes = BytesIO()
-                    pg.save(img_bytes, format="PNG")
-                    z.writestr(f"montaje_page_{idx:02d}.png", img_bytes.getvalue())
-
+            with zipfile.ZipFile(tmpzip.name, "w", zipfile.ZIP_DEFLATED) as zf:
+                for pf in pages_files:
+                    zf.write(pf, os.path.basename(pf))
             tmpzip.flush()
             tmpzip.seek(0)
             zip_data = open(tmpzip.name, "rb").read()
             st.download_button(
-                label="📥 Descargar TODO en ZIP (imágenes 300ppi)",
+                label="📥 Descargar TODO en ZIP (300ppi)",
                 data=zip_data,
                 file_name="montaje_dtf_pages.zip",
                 mime="application/zip"
             )
 
-        os.remove(tmpzip.name)
+        # Limpiar temporales
+        for pf in pages_files:
+            os.remove(pf)
+        os.rmdir(temp_dir)
