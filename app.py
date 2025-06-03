@@ -7,25 +7,26 @@ import zipfile
 import tempfile
 import os
 
-st.set_page_config(page_title="Montador DTF con muchas copias", layout="wide")
-st.title("🖨️ Montador DTF: Packing con muchas copias y páginas")
+st.set_page_config(page_title="Montador DTF con cropping y spacing ajustado", layout="wide")
+st.title("🖨️ Montador DTF - Packing con crop y 0.5cm spacing")
 
 ROLL_WIDTH_CM = 55
 
 # Usamos dos modalidades de resolución:
-PPI_PREVIEW = 100  # para que la previsualización no explote memoria
-PPI_FINAL = 300    # para la descarga definitiva
+PPI_PREVIEW = 100  # para vista previa ligera
+PPI_FINAL = 300    # para descarga final
 PX_PER_CM_PREVIEW = PPI_PREVIEW / 2.54
 PX_PER_CM_FINAL = PPI_FINAL / 2.54
 
-SPACING_CM = 1.5  # 1.5 cm de espacio para tijera
+# Espaciado para corte de 0.5 cm
+SPACING_CM = 0.5
 SPACING_PX_PREVIEW = int(SPACING_CM * PX_PER_CM_PREVIEW)
 SPACING_PX_FINAL = int(SPACING_CM * PX_PER_CM_FINAL)
 
 # Umbral para dividir en "páginas" (1 m en 300 ppi)
 UMBRAL_PX_FINAL = int((100) * PX_PER_CM_FINAL)  # 100 cm * px_por_cm
 
-# Desactivar el límite de BOMBS (imágenes grandes)
+# Desactivar límite BOMBS para imágenes grandes
 Image.MAX_IMAGE_PIXELS = None
 
 uploaded_files = st.file_uploader(
@@ -55,18 +56,23 @@ if uploaded_files:
         configuraciones.append((file, tipo, copias))
 
     if st.button("🧩 Generar montaje"):
-        # 1) Preparamos la lista de "items" con la imagen ya redimensionada
+        # 1) Preparamos la lista de items con imagen recortada y redimensionada
         items = []
         preview_placements = []
         final_placements = []
 
-        # Recorremos cada configuración
         for file, tipo_diseño, copias in configuraciones:
             try:
                 img = Image.open(file).convert("RGBA")
             except Exception as e:
                 st.error(f"Error cargando {file.name}: {e}")
                 continue
+
+            # Crop transparente: obtén canal alpha y bbox
+            alpha = img.split()[3]
+            bbox = alpha.getbbox()
+            if bbox:
+                img = img.crop(bbox)
 
             # Determinar ancho en cm según tipo
             if "Espalda" in tipo_diseño:
@@ -76,7 +82,7 @@ if uploaded_files:
             else:
                 ancho_cm = 7
 
-            # Calcular px para preview y px para final
+            # Calcular px para preview y final
             w_px_preview = int(ancho_cm * PX_PER_CM_PREVIEW)
             h_px_preview = int((img.height / img.width) * w_px_preview)
             img_preview = img.resize((w_px_preview, h_px_preview), Image.LANCZOS)
@@ -85,15 +91,13 @@ if uploaded_files:
             h_px_final = int((img.height / img.width) * w_px_final)
             img_final = img.resize((w_px_final, h_px_final), Image.LANCZOS)
 
-            # Añadimos la misma imagen tantas veces como "copias"
             for _ in range(copias):
                 items.append((img_preview, img_final, w_px_preview, h_px_preview, w_px_final, h_px_final))
 
-        # 2) Calculamos la colocación por filas para "preview" y para "final"
+        # 2) Colocar items en filas para preview y final
         roll_w_px_preview = int(ROLL_WIDTH_CM * PX_PER_CM_PREVIEW)
         roll_w_px_final = int(ROLL_WIDTH_CM * PX_PER_CM_FINAL)
 
-        # Variables de estado para recorrer items
         cur_x_prev = 0
         cur_row_h_prev = 0
         y_offset_prev = 0
@@ -102,16 +106,14 @@ if uploaded_files:
         cur_row_h_fin = 0
         y_offset_fin = 0
 
-        # Lista de tuplas (img_preview, x_prev, y_prev), (img_final, x_fin, y_fin)
         for img_p, img_f, w_p, h_p, w_f, h_f in items:
-            # --- COLOCACIÓN EN PREVIEW ---
+            # Preview
             if cur_x_prev == 0:
                 x_prev = 0
             else:
                 if cur_x_prev + SPACING_PX_PREVIEW + w_p <= roll_w_px_preview:
                     x_prev = cur_x_prev + SPACING_PX_PREVIEW
                 else:
-                    # nueva fila en preview
                     y_offset_prev += cur_row_h_prev + SPACING_PX_PREVIEW
                     cur_x_prev = 0
                     cur_row_h_prev = 0
@@ -122,14 +124,13 @@ if uploaded_files:
             if h_p > cur_row_h_prev:
                 cur_row_h_prev = h_p
 
-            # --- COLOCACIÓN EN FINAL ---
+            # Final
             if cur_x_fin == 0:
                 x_fin = 0
             else:
                 if cur_x_fin + SPACING_PX_FINAL + w_f <= roll_w_px_final:
                     x_fin = cur_x_fin + SPACING_PX_FINAL
                 else:
-                    # nueva fila en final
                     y_offset_fin += cur_row_h_fin + SPACING_PX_FINAL
                     cur_x_fin = 0
                     cur_row_h_fin = 0
@@ -140,7 +141,7 @@ if uploaded_files:
             if h_f > cur_row_h_fin:
                 cur_row_h_fin = h_f
 
-        # 3) Creamos lienzo de preview
+        # 3) Crear lienzo preview
         total_h_prev = y_offset_prev + cur_row_h_prev
         canvas_prev = Image.new("RGBA", (roll_w_px_preview, total_h_prev), (255, 255, 255, 0))
         for img_p, x_p, y_p, w_p, h_p in preview_placements:
@@ -149,37 +150,29 @@ if uploaded_files:
         st.success("✅ Vista previa generada (baja resolución).")
         st.image(canvas_prev, caption="👁️ Vista previa (PPI reducido)", use_column_width=True)
 
-        # 4) Creamos “páginas” en resolución final (300 ppi) si superamos el umbral
+        # 4) Crear páginas en resolución final
         pages = []
-        # Preparamos un “lienzo de trabajo” que va creciendo
-        # pero cuando y + h_f > UMBRAL_PX_FINAL, guardamos la página y reiniciamos
         cur_page = Image.new("RGBA", (roll_w_px_final, UMBRAL_PX_FINAL), (255, 255, 255, 0))
         page_index = 1
 
         for (img_f, x_f, y_f, w_f, h_f) in final_placements:
-            # Si esta copia excede el límite de la página actual:
             if y_f + h_f > (page_index * UMBRAL_PX_FINAL):
-                # Guardamos la página actual
                 pages.append(cur_page)
-                # Creamos nueva página, y mudamos a la siguiente
                 cur_page = Image.new("RGBA", (roll_w_px_final, UMBRAL_PX_FINAL), (255, 255, 255, 0))
                 page_index += 1
 
-            # Para calcular la posición dentro de la página actual:
             y_local = y_f - ((page_index - 1) * UMBRAL_PX_FINAL)
             cur_page.paste(img_f, (x_f, y_local), img_f)
 
-        # Guardamos la última página parcial
         pages.append(cur_page)
 
-        # 5) Mostramos datos finales y botón de descarga
+        # 5) Mostrar datos finales y descarga
         total_h_fin = y_offset_fin + cur_row_h_fin
         total_cm = total_h_fin / PX_PER_CM_FINAL
         total_m = total_cm / 100
         st.success(f"✅ Montaje FINAL preparado → Altura total: {total_cm:.1f} cm ({total_m:.2f} m)")
         st.write(f"• Se generaron **{len(pages)} página(s)** de {UMBRAL_PX_FINAL} px (~1 m a 300 ppi).")
 
-        # Crear un ZIP en memoria con todas las páginas (PNG)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmpzip:
             with zipfile.ZipFile(tmpzip.name, "w", zipfile.ZIP_DEFLATED) as z:
                 for idx, pg in enumerate(pages, start=1):
@@ -197,5 +190,4 @@ if uploaded_files:
                 mime="application/zip"
             )
 
-        # Eliminar archivo temporal
         os.remove(tmpzip.name)
