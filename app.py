@@ -3,16 +3,18 @@ from PIL import Image
 import math
 from io import BytesIO
 
-st.set_page_config(page_title="Montador DTF Single Sheet", layout="wide")
-st.title("🖨️ Montador DTF - Single Sheet 55cm Width")
+st.set_page_config(page_title="Montador DTF Optimizado", layout="wide")
+st.title("🖨️ Montador DTF - Single Sheet 55cm Width (Memoria Optimizada)")
 
 ROLL_WIDTH_CM = 55
-PPI = 150  # Moderate PPI to control memory
-PX_PER_CM = PPI / 2.54
+PPI_PREVIEW = 100   # baja resolución para preview
+PPI_FINAL = 100     # reducir a 100 ppi para final y ahorrar memoria
+PX_PER_CM_PREVIEW = PPI_PREVIEW / 2.54
+PX_PER_CM_FINAL = PPI_FINAL / 2.54
 
 # Espaciado 0.5 cm
 SPACING_CM = 0.5
-SPACING_PX = int(SPACING_CM * PX_PER_CM)
+SPACING_PX = int(SPACING_CM * PX_PER_CM_FINAL)  # usar escala final
 
 # Permitir imágenes grandes
 Image.MAX_IMAGE_PIXELS = None
@@ -46,6 +48,7 @@ if uploaded_files:
     if st.button("🧩 Generar montaje"):
         items = []
         # Procesar cada imagen
+        roll_w_px = int(ROLL_WIDTH_CM * PX_PER_CM_FINAL)
         for file, tipo_diseño, copias in configuraciones:
             try:
                 img = Image.open(file).convert("RGBA")
@@ -65,7 +68,7 @@ if uploaded_files:
             else:
                 ancho_cm = 9
 
-            w_px = int(ancho_cm * PX_PER_CM)
+            w_px = int(ancho_cm * PX_PER_CM_FINAL)
             h_px = int((img.height / img.width) * w_px)
             img_resized = img.resize((w_px, h_px), Image.LANCZOS)
 
@@ -73,34 +76,32 @@ if uploaded_files:
                 items.append((img_resized, w_px, h_px))
 
         # Calcular ubicaciones
-        roll_w_px = int(ROLL_WIDTH_CM * PX_PER_CM)
         x_offset = 0
         y_offset = 0
         current_row_h = 0
-
         placements = []
         for img, w_px, h_px in items:
-            # Si no cabe en la fila actual, nueva fila
             if x_offset + w_px > roll_w_px:
                 y_offset += current_row_h + SPACING_PX
                 x_offset = 0
                 current_row_h = 0
-
             placements.append((img, x_offset, y_offset))
             x_offset += w_px + SPACING_PX
             if h_px > current_row_h:
                 current_row_h = h_px
 
         total_height = y_offset + current_row_h
+        if total_height < 1:
+            total_height = current_row_h
 
         # Crear canvas final
         canvas = Image.new("RGBA", (roll_w_px, total_height), (255, 255, 255, 0))
         for img, x, y in placements:
             canvas.paste(img, (x, y), img)
 
-        total_cm = total_height / PX_PER_CM
+        total_cm = total_height / PX_PER_CM_FINAL
         total_m = total_cm / 100
-        st.success(f"✅ Montaje FINAL en una sola hoja → Alto: {total_cm:.1f} cm ({total_m:.2f} m)")
+        st.success(f"✅ Montaje FINAL → Alto: {total_cm:.1f} cm ({total_m:.2f} m)")
         st.image(canvas, caption="🖼️ Montaje final", use_column_width=True)
 
         # Descarga
