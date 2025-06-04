@@ -3,25 +3,26 @@ from PIL import Image
 import math
 from io import BytesIO
 
-st.set_page_config(page_title="Montador DTF Optimizado", layout="wide")
-st.title("🖨️ Montador DTF - Single Sheet 55cm Width (Memoria Optimizada)")
+st.set_page_config(page_title="Montador DTF - Two Espaldas Per Row", layout="wide")
+st.title("🖨️ Montador DTF - Packing 2 Espaldas x Fila, Espalda 27.5cm, Frontal 9cm")
 
 ROLL_WIDTH_CM = 55
-PPI_PREVIEW = 100   # baja resolución para preview
-PPI_FINAL = 100     # reducir a 100 ppi para final y ahorrar memoria
+PPI_PREVIEW = 100   # PPI para vista previa
+PPI_FINAL = 100     # PPI para imagen final (para reducir memoria)
 PX_PER_CM_PREVIEW = PPI_PREVIEW / 2.54
 PX_PER_CM_FINAL = PPI_FINAL / 2.54
 
 # Espaciado 0.5 cm
 SPACING_CM = 0.5
-SPACING_PX = int(SPACING_CM * PX_PER_CM_FINAL)  # usar escala final
+SPACING_PX = int(round(SPACING_CM * PX_PER_CM_FINAL))
 
 # Permitir imágenes grandes
 Image.MAX_IMAGE_PIXELS = None
 
 uploaded_files = st.file_uploader(
-    "Sube varios diseños (PNG, JPG)",
-    type=["png", "jpg", "jpeg"],
+    "Sube varios diseños (PNG, JPG)", 
+    type=["png", "jpg", "jpeg"], 
+    accept_multiple_files=True,
     accept_multiple_files=True
 )
 
@@ -47,8 +48,9 @@ if uploaded_files:
 
     if st.button("🧩 Generar montaje"):
         items = []
-        # Procesar cada imagen
-        roll_w_px = int(ROLL_WIDTH_CM * PX_PER_CM_FINAL)
+        # Obtener anchura de rollo en px
+        roll_w_px = int(round(ROLL_WIDTH_CM * PX_PER_CM_FINAL))
+
         for file, tipo_diseño, copias in configuraciones:
             try:
                 img = Image.open(file).convert("RGBA")
@@ -56,7 +58,7 @@ if uploaded_files:
                 st.error(f"Error cargando {file.name}: {e}")
                 continue
 
-            # Crop transparente
+            # Recortar transparencias
             alpha = img.split()[3]
             bbox = alpha.getbbox()
             if bbox:
@@ -68,23 +70,27 @@ if uploaded_files:
             else:
                 ancho_cm = 9
 
-            w_px = int(ancho_cm * PX_PER_CM_FINAL)
-            h_px = int((img.height / img.width) * w_px)
+            # Calcular px exacto usando ancho_cm
+            w_px = int(round(ancho_cm * PX_PER_CM_FINAL))
+            h_px = int(round((img.height / img.width) * w_px))
             img_resized = img.resize((w_px, h_px), Image.LANCZOS)
 
             for _ in range(copias):
                 items.append((img_resized, w_px, h_px))
 
-        # Calcular ubicaciones
+        # Packing en una sola hoja
         x_offset = 0
         y_offset = 0
         current_row_h = 0
+
         placements = []
         for img, w_px, h_px in items:
+            # Si no cabe en la fila actual, saltar a la siguiente
             if x_offset + w_px > roll_w_px:
                 y_offset += current_row_h + SPACING_PX
                 x_offset = 0
                 current_row_h = 0
+
             placements.append((img, x_offset, y_offset))
             x_offset += w_px + SPACING_PX
             if h_px > current_row_h:
@@ -101,10 +107,9 @@ if uploaded_files:
 
         total_cm = total_height / PX_PER_CM_FINAL
         total_m = total_cm / 100
-        st.success(f"✅ Montaje FINAL → Alto: {total_cm:.1f} cm ({total_m:.2f} m)")
+        st.success(f"✅ Montaje FINAL → Alto: {total_cm:.1f} cm ({total_m:.2f} m)  con ancho fijo {ROLL_WIDTH_CM} cm")
         st.image(canvas, caption="🖼️ Montaje final", use_column_width=True)
 
-        # Descarga
         img_bytes = BytesIO()
         canvas.save(img_bytes, format="PNG")
         st.download_button(
