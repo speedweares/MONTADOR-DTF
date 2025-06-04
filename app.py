@@ -6,7 +6,7 @@ import zipfile
 import tempfile
 import os
 
-st.set_page_config(page_title="Montador DTF Actualizado", layout="wide")
+st.set_page_config(page_title="Montador DTF - Espalda 27.5cm, Frontal 9cm", layout="wide")
 st.title("🖨️ Montador DTF - Espalda 27.5cm, Frontales 9cm, 0.5cm spacing")
 
 ROLL_WIDTH_CM = 55
