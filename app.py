@@ -6,26 +6,26 @@ import zipfile
 import tempfile
 import os
 
-st.set_page_config(page_title="Montador DTF con cropping y spacing ajustado", layout="wide")
-st.title("🖨️ Montador DTF - Packing con crop y 0.5cm spacing")
+st.set_page_config(page_title="Montador DTF Actualizado", layout="wide")
+st.title("🖨️ Montador DTF - Espalda 27.5cm, Frontales 9cm, 0.5cm spacing")
 
 ROLL_WIDTH_CM = 55
 
-# Usamos dos modalidades de resolución:
-PPI_PREVIEW = 100  # para vista previa ligera
-PPI_FINAL = 300    # para descarga final
+# Resoluciones
+PPI_PREVIEW = 100
+PPI_FINAL = 300
 PX_PER_CM_PREVIEW = PPI_PREVIEW / 2.54
 PX_PER_CM_FINAL = PPI_FINAL / 2.54
 
-# Espaciado para corte de 0.5 cm
+# Espaciado para corte 0.5 cm
 SPACING_CM = 0.5
 SPACING_PX_PREVIEW = int(SPACING_CM * PX_PER_CM_PREVIEW)
 SPACING_PX_FINAL = int(SPACING_CM * PX_PER_CM_FINAL)
 
-# Umbral para dividir en "páginas" (1 m en 300 ppi)
-UMBRAL_PX_FINAL = int((100) * PX_PER_CM_FINAL)  # 100 cm * px_por_cm
+# Umbral para páginas (1m a 300ppi)
+UMBRAL_PX_FINAL = int((100) * PX_PER_CM_FINAL)
 
-# Desactivar límite BOMBS para imágenes grandes
+# Desactivar límite para imágenes grandes
 Image.MAX_IMAGE_PIXELS = None
 
 uploaded_files = st.file_uploader(
@@ -42,7 +42,7 @@ if uploaded_files:
         with col1:
             tipo = st.selectbox(
                 f"Tipo diseño #{i+1}",
-                ["Espalda (22.5 cm)", "Frontal (5 cm)", "Frontal (7 cm)"],
+                ["Espalda (27.5 cm)", "Frontal (9 cm)"],
                 key=f"tipo_{i}"
             )
         with col2:
@@ -55,7 +55,6 @@ if uploaded_files:
         configuraciones.append((file, tipo, copias))
 
     if st.button("🧩 Generar montaje"):
-        # Preparamos la lista de items con imagen recortada y redimensionada
         items = []
         preview_placements = []
         final_placements = []
@@ -75,13 +74,11 @@ if uploaded_files:
 
             # Determinar ancho en cm
             if "Espalda" in tipo_diseño:
-                ancho_cm = 22.5
-            elif "5" in tipo_diseño:
-                ancho_cm = 5
+                ancho_cm = 27.5
             else:
-                ancho_cm = 7
+                ancho_cm = 9
 
-            # Calcular px preview y final
+            # Calcular px para preview y final
             w_px_preview = int(ancho_cm * PX_PER_CM_PREVIEW)
             h_px_preview = int((img.height / img.width) * w_px_preview)
             img_preview = img.resize((w_px_preview, h_px_preview), Image.LANCZOS)
@@ -93,7 +90,7 @@ if uploaded_files:
             for _ in range(copias):
                 items.append((img_preview, img_final, w_px_preview, h_px_preview, w_px_final, h_px_final))
 
-        # Colocar items en filas para preview y final
+        # Ubicar items en filas
         roll_w_px_preview = int(ROLL_WIDTH_CM * PX_PER_CM_PREVIEW)
         roll_w_px_final = int(ROLL_WIDTH_CM * PX_PER_CM_FINAL)
 
@@ -140,16 +137,16 @@ if uploaded_files:
             if h_f > cur_row_h_fin:
                 cur_row_h_fin = h_f
 
-        # Crear lienzo preview
+        # Lienzo preview
         total_h_prev = y_offset_prev + cur_row_h_prev
         canvas_prev = Image.new("RGBA", (roll_w_px_preview, total_h_prev), (255, 255, 255, 0))
         for img_p, x_p, y_p, w_p, h_p in preview_placements:
             canvas_prev.paste(img_p, (x_p, y_p), img_p)
 
-        st.success("✅ Vista previa generada (baja resolución).")
-        st.image(canvas_prev, caption="👁️ Vista previa (PPI reducido)", use_column_width=True)
+        st.success("✅ Vista previa generada.")
+        st.image(canvas_prev, caption="👁️ Vista previa", use_column_width=True)
 
-        # Crear páginas en resolución final
+        # Crear páginas final
         pages = []
         cur_page = Image.new("RGBA", (roll_w_px_final, UMBRAL_PX_FINAL), (255, 255, 255, 0))
         page_index = 1
@@ -165,12 +162,11 @@ if uploaded_files:
 
         pages.append(cur_page)
 
-        # Mostrar datos finales y descarga
         total_h_fin = y_offset_fin + cur_row_h_fin
         total_cm = total_h_fin / PX_PER_CM_FINAL
         total_m = total_cm / 100
-        st.success(f"✅ Montaje FINAL preparado → Altura total: {total_cm:.1f} cm ({total_m:.2f} m)")
-        st.write(f"• Se generaron **{len(pages)} página(s)** de {UMBRAL_PX_FINAL} px (~1 m a 300 ppi).")
+        st.success(f"✅ Montaje FINAL → Altura total: {total_cm:.1f} cm ({total_m:.2f} m)")
+        st.write(f"• Se generaron **{len(pages)} página(s)** de {UMBRAL_PX_FINAL} px (~1 m).")
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmpzip:
             with zipfile.ZipFile(tmpzip.name, "w", zipfile.ZIP_DEFLATED) as z:
@@ -183,7 +179,7 @@ if uploaded_files:
             tmpzip.seek(0)
             zip_data = open(tmpzip.name, "rb").read()
             st.download_button(
-                label="📥 Descargar TODO en ZIP (imágenes 300ppi)",
+                label="📥 Descargar TODO en ZIP (300ppi)",
                 data=zip_data,
                 file_name="montaje_dtf_pages.zip",
                 mime="application/zip"
